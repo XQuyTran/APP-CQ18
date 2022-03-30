@@ -11,5 +11,5 @@ Trương Minh Tài | 18120544
 
 **Tài liệu của nhóm:**
 - [Bảng](https://docs.google.com/spreadsheets/d/17e8ABQ9Iapvc3-ZrFjK9iU8WDpfnkyLNLYU3K1HgLrc/edit?usp=sharing) kế hoạch và phân công công việc.
-- Report: [Google Colab](https://colab.research.google.com/github/XQuyTran/APP-CQ18/blob/main/Report.ipynb)
+- [Report](https://colab.research.google.com/github/XQuyTran/APP-CQ18/blob/main/Report.ipynb) - Google Colab
 - [Link](https://drive.google.com/drive/folders/1tZFmGzbxoLc7-JPlpcTevv-yzVBoP_qr?usp=sharing) Google Drive
