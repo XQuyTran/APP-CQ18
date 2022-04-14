@@ -6,7 +6,7 @@
 
    ***Xác định loại bệnh thực vật bằng phương pháp trích xuất dữ liệu và mô hình XGBoost.***
 
-Thùng chứa đồ án của nhóm 3, gồm các thành viên:
+*Nhóm 3:*
 
 Họ tên | MSSV
 :----: | :--:
