@@ -1,10 +1,10 @@
 # APP-CQ18-HCMUS
 
-**Môn: Lập trình song song ứng dụng - 18_21.**\
+**Môn: Lập trình song song ứng dụng - 18_21.**
 
-**Đồ án: Song song và tối ưu hóa ứng dụng:**\
+**Đồ án: Song song và tối ưu hóa ứng dụng:**
 
-      ***Xác định loại bệnh thực vật bằng phương pháp trích xuất dữ liệu và mô hình XGBoost.***
+   ***Xác định loại bệnh thực vật bằng phương pháp trích xuất dữ liệu và mô hình XGBoost.***
 
 Thùng chứa đồ án của nhóm 3, gồm các thành viên:
 
