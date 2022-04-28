@@ -1,7 +1,3 @@
-# from sklearn.datasets import load_breast_cancer
-# from sklearn.model_selection import train_test_split
-# from sklearn.metrics import accuracy_score
-# from tree import DecisionTreeClassifier
 import numpy as np
 from xgboost import XGBClassifier
 from argparse import ArgumentParser
@@ -12,21 +8,12 @@ def create_argument_parser():
     parser.add_argument('X_train')
     parser.add_argument('y_train')
     parser.add_argument('X_test')
-    parser.add_argument('--progress', choices=[True, False], type=bool)
+    parser.add_argument('save_dir')
+    parser.add_argument('--progress', choices=[True, False], type=bool, default=False)
     
     return parser
 
 if __name__ == '__main__':
-    # data = load_breast_cancer()
-    # X, y = data.data, data.target
-    # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
-
-    # model = DecisionTreeClassifier(max_depth=10)
-    # model.fit(X_train, y_train)
-    # y_pred = model.predict(X_test)
-
-    # print('Accuracy: ', accuracy_score(y_test, y_pred))
-
     parser = create_argument_parser()
     args = parser.parse_args()
 
@@ -42,4 +29,5 @@ if __name__ == '__main__':
     xgb_model = xgb_model.fit(X_train, y_train)
     y_pred_prob = xgb_model.predict_proba(X_test)
 
-    np.savetxt('predict_proba.csv', y_pred_prob, fmt='%f', delimiter=',')
+    np.savetxt(f'{args.save_dir}', y_pred_prob, fmt='%f', delimiter=',')
+    print(f'predictions saved to {args.save_dir}')

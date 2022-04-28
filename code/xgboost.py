@@ -11,7 +11,7 @@ class XGBClassifier:
     Tham khảo: - https://medium.com/analytics-vidhya/what-makes-xgboost-so-extreme-e1544a4433bb
     '''
     def __init__(self, n_estimators, learning_rate=0.3,
-                        min_samples_split=2, max_depth=6, lambda_=0, progress=False) -> None:
+                        min_samples_split=2, max_depth=6, lambda_=1, progress=False) -> None:
         '''
         Phương thức khởi tạo mô hình XGBoost
 
@@ -44,20 +44,20 @@ class XGBClassifier:
         if self.progress:
             for estimator in tqdm(self.estimators, 'fitting estimators'):
                 estimator.fit(X, y, y_pred)
-                update_pred = softmax(estimator.predict(X))
-                y_pred -= self.learning_rate * update_pred
+                update_pred = estimator.predict(X)
+                y_pred += self.learning_rate * update_pred
         else:
             for estimator in self.estimators:
                 estimator.fit(X, y, y_pred)
-                update_pred = softmax(estimator.predict(X))
-                y_pred -= self.learning_rate * update_pred
+                update_pred = estimator.predict(X)
+                y_pred += self.learning_rate * update_pred
         return self
 
     def predict(self, X, prob=False):
         y_pred = np.full((self.n_samples, self.n_classes), self.init_pred)
         for estimator in self.estimators:
             update_pred = estimator.predict(X)
-            y_pred -= self.learning_rate * update_pred
+            y_pred += self.learning_rate * update_pred
 
         y_pred = softmax(y_pred)
         if not prob:

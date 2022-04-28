@@ -17,8 +17,8 @@ def ce_softmax_grad(y_true, y_pred):
     '''
     gradient = softmax(y_pred)
 
-    for i in range(len(y_pred)):
-        gradient[i, y_true[i]] -= 1
+    for i, y in enumerate(y_true):
+        gradient[i, y] -= 1
 
     return gradient
 
@@ -102,8 +102,11 @@ def _gain(y, y_pred, lambda_):
     '''
     nominator = ce_softmax_grad(y, y_pred).sum(0) ** 2
     denominator = np.sum(ce_softmax_hess(y, y_pred), 0) + lambda_
+    
+    gain = nominator / denominator
+    #gain[np.isnan(gain)] = 0
 
-    return (nominator / denominator).sum()
+    return gain.sum()
 
 @njit
 def _newton_boosting(y, y_pred, lambda_):
@@ -126,8 +129,11 @@ def _newton_boosting(y, y_pred, lambda_):
     '''
     gradient = ce_softmax_grad(y, y_pred)
     hessian = ce_softmax_hess(y, y_pred)
+    
+    score = -gradient.sum(0) / (hessian.sum(0) + lambda_)
+    #score[np.isnan(score)] = 0
 
-    return -gradient.sum(0) / (hessian.sum(0) + lambda_)
+    return score
 
 @njit
 def _create_split(X, threshold):
@@ -156,9 +162,10 @@ def _best_split_xgb_node(X, y, y_pred_base, lambda_):
     best_threshold = -1.
 
     # tạo thứ tự duyệt các cột ngẫu nhiên
+    # features = np.random.choice(X.shape[1], X.shape[1], False)
     features = np.random.permutation(X.shape[1])
-    for i in range(X.shape[1]):
-        feat = features[i]
+    for feat in features:
+        # feat = features[i]
         X_feat = X[:, feat]
 
         # xác định các giá trị ngưỡng ở mỗi cột và tính độ lợi
@@ -239,12 +246,17 @@ class XGBRegressionTree:
         return self
 
     def _traverse_tree(self, x, node):
-        if node.is_leaf():
-            return node.value
+        while not node.is_leaf():
+            # return node.value
 
-        if x[node.feature] <= node.threshold:
-            return self._traverse_tree(x, node.left)
-        return self._traverse_tree(x, node.right)
+            if x[node.feature] < node.threshold:
+                # return self._traverse_tree(x, node.left)
+                node = node.left
+            # return self._traverse_tree(x, node.right)
+            else:
+                node = node.right
+
+        return node.value
     
     def predict(self, X):
         return np.apply_along_axis(self._traverse_tree, 1, X, self.root)
