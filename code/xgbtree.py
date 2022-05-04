@@ -5,7 +5,7 @@ from numba import njit
 @njit
 def softmax(x):
     eZ = np.exp(x)
-    return eZ / np.sum(eZ, axis=1).reshape(-1, 1)
+    return eZ / np.expand_dims(eZ.sum(1), 1)
 
 @njit
 def ce_softmax_grad(y_true, y_pred):
@@ -101,10 +101,11 @@ def _gain(y, y_pred, lambda_):
     - https://medium.com/analytics-vidhya/what-makes-xgboost-so-extreme-e1544a4433bb
     '''
     nominator = ce_softmax_grad(y, y_pred).sum(0) ** 2
-    denominator = np.sum(ce_softmax_hess(y, y_pred), 0) + lambda_
-    
+    denominator = ce_softmax_hess(y, y_pred).sum(0) + lambda_
+    # denominator[denominator==0] = 1
+
     gain = nominator / denominator
-    #gain[np.isnan(gain)] = 0
+    # gain[np.isnan(gain)] = 0
 
     return gain.sum()
 
@@ -127,10 +128,14 @@ def _newton_boosting(y, y_pred, lambda_):
     - https://medium.com/analytics-vidhya/what-makes-xgboost-so-extreme-e1544a4433bb
     - https://arxiv.org/pdf/1603.02754.pdf
     '''
-    gradient = ce_softmax_grad(y, y_pred)
-    hessian = ce_softmax_hess(y, y_pred)
+    # gradient = ce_softmax_grad(y, y_pred)
+    # hessian = ce_softmax_hess(y, y_pred)
+
+    nominator = ce_softmax_grad(y, y_pred).sum(0)
+    denominator = ce_softmax_hess(y, y_pred).sum(0) + lambda_
+    # denominator[denominator==0] = 1
     
-    score = -gradient.sum(0) / (hessian.sum(0) + lambda_)
+    score = -nominator / denominator
     #score[np.isnan(score)] = 0
 
     return score
@@ -161,6 +166,7 @@ def _best_split_xgb_node(X, y, y_pred_base, lambda_):
     best_feature = -1
     best_threshold = -1.
 
+    node_gain = _gain(y, y_pred_base, lambda_)
     # tạo thứ tự duyệt các cột ngẫu nhiên
     # features = np.random.choice(X.shape[1], X.shape[1], False)
     features = np.random.permutation(X.shape[1])
@@ -169,10 +175,10 @@ def _best_split_xgb_node(X, y, y_pred_base, lambda_):
         X_feat = X[:, feat]
 
         # xác định các giá trị ngưỡng ở mỗi cột và tính độ lợi
-        node_gain = _gain(y, y_pred_base, lambda_)
+        
         thresholds = np.unique(X_feat)
-        for i in range(thresholds.shape[0]):
-            left_idx, right_idx = _create_split(X_feat, thresholds[i])
+        for threshold in thresholds:
+            left_idx, right_idx = _create_split(X_feat, threshold)
 
             left_gain = _gain(y[left_idx], y_pred_base[left_idx], lambda_)
             right_gain = _gain(y[right_idx], y_pred_base[right_idx], lambda_)
@@ -181,18 +187,18 @@ def _best_split_xgb_node(X, y, y_pred_base, lambda_):
             if current_gain > best_gain:
                 best_gain = current_gain
                 best_feature = feat
-                best_threshold = thresholds[i]
+                best_threshold = threshold
 
     return best_feature, best_threshold
 
 
 class XGBRegressionTree:
-    def __init__(self, lambda_=1, min_samples_split=2, max_depth=None) -> None:
+    def __init__(self, lambda_=1., min_samples_split=2, max_depth=None) -> None:
         self.lambda_ = lambda_
         self.min_samples_split = min_samples_split
         self.max_depth = max_depth
 
-    def _is_finished(self, depth):
+    def _is_finished(self, n_samples, depth):
         '''
         Phương thức kiểm tra điều kiện dừng xây dựng cây.
         Dừng xây dựng cây khi thỏa một trong các điều kiện:
@@ -206,9 +212,9 @@ class XGBRegressionTree:
         Đầu ra:
         - stop (bool): kết quả dừng xây dựng cây hay không
         '''
-        if (depth >= self.max_depth
-            or self.n_classes == 1
-            or self.n_samples < self.min_samples_split):
+        if (n_samples < self.min_samples_split
+            or depth >= self.max_depth
+            or self.n_classes == 1):
             return True
         return False
 
@@ -226,7 +232,7 @@ class XGBRegressionTree:
         - node (Node): nút đươc tạo
         '''
         # kiểm tra điều kiện dừng
-        if self._is_finished(depth):
+        if self._is_finished(X.shape[0], depth):
             leaf_value = _newton_boosting(y, y_pred_base, self.lambda_)
             return Node(value=leaf_value)
 
@@ -235,24 +241,19 @@ class XGBRegressionTree:
 
         # xây dựng nút con và trả về.
         left_idx, right_idx = _create_split(X[:, best_feat], best_thresh)
-        left_child = self._build_tree(X[left_idx, :], y[left_idx], y_pred_base[left_idx], depth + 1)
-        right_child = self._build_tree(X[right_idx, :], y[right_idx], y_pred_base[right_idx], depth + 1)
+        left_child = self._build_tree(X[left_idx], y[left_idx], y_pred_base[left_idx], depth + 1)
+        right_child = self._build_tree(X[right_idx], y[right_idx], y_pred_base[right_idx], depth + 1)
         return Node(best_feat, best_thresh, left_child, right_child)
 
     def fit(self, X, y, y_pred_base):
-        self.n_samples, self.n_features = X.shape
         self.n_classes = len(np.unique(y))
         self.root = self._build_tree(X, y, y_pred_base)
         return self
 
     def _traverse_tree(self, x, node):
         while not node.is_leaf():
-            # return node.value
-
             if x[node.feature] < node.threshold:
-                # return self._traverse_tree(x, node.left)
                 node = node.left
-            # return self._traverse_tree(x, node.right)
             else:
                 node = node.right
 
@@ -260,5 +261,3 @@ class XGBRegressionTree:
     
     def predict(self, X):
         return np.apply_along_axis(self._traverse_tree, 1, X, self.root)
-
-    
