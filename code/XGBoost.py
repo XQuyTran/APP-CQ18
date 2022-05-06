@@ -1,4 +1,5 @@
 import numpy as np
+import json
 from xgbtree import XGBRegressionTree, softmax
 from tqdm import tqdm
 
@@ -9,7 +10,7 @@ class XGBClassifier:
 
     Tham khảo: - https://medium.com/analytics-vidhya/what-makes-xgboost-so-extreme-e1544a4433bb
     '''
-    def __init__(self, n_estimators, learning_rate=0.3,
+    def __init__(self, n_estimators=1, learning_rate=0.3,
                         min_samples_split=2, max_depth=6, lambda_=1.) -> None:
         '''
         Khởi tạo mô hình XGBoost
@@ -27,10 +28,11 @@ class XGBClassifier:
         self.max_depth=max_depth
         self.lambda_ = lambda_
 
+
+    def fit(self, X, y):
         self.estimators = [XGBRegressionTree(self.lambda_, self.min_samples_split, self.max_depth)
                                     for _ in range(self.n_estimators)]
 
-    def fit(self, X, y):
         self.n_samples, self.n_features = X.shape
         self.n_classes, self.init_pred = np.unique(y, return_counts=True)
         self.n_classes = len(self.n_classes)
@@ -53,10 +55,11 @@ class XGBClassifier:
         return self
 
     def predict(self, X, prob=False, raw=False):
-        y_pred = np.full((self.n_samples, self.n_classes), self.init_pred)
-        for estimator in self.estimators:
+        y_pred = np.zeros((X.shape[0], self.n_classes))
+        for i, estimator in enumerate(self.estimators):
             update_pred = estimator.predict(X)
-            y_pred += self.learning_rate * update_pred
+            # y_pred[:, i % self.n_classes] += self.learning_rate * update_pred
+            y_pred[:, i % self.n_classes] += update_pred
 
         y_pred -= y_pred.max(1, keepdims=True) # https://cs231n.github.io/linear-classify/#softmax
         if not raw:
@@ -71,3 +74,33 @@ class XGBClassifier:
 
     def predict_raw(self, X):
         return self.predict(X, raw=True)
+
+    @classmethod
+    def load_model(cls, learner_path, tree_path):
+        '''
+        Đọc mô hình XGBoost đã được huấn luyện.
+
+        Đầu vào:
+        - learner_path (str): đường dẫn tới tập tin json lưu thông tin chi tiết các siêu tham số của mô hình. 
+        Nội dung tập tin tương tự kết quả phương thức booster.save_model của thư viện xgboost.
+        - tree_path (str): đường dẫn tới tập tin json thể hiện cấu trúc các cây thành phần.
+        Nội dung tập tin tương tự kết quả phương thức booster.dump_model của thư viện xgboost.
+        '''
+
+        # phâh tích cú pháp json và tạo từ điển các tham số của mô hình
+        with open(learner_path) as f:
+            model = json.load(f)
+            
+        with open(tree_path) as f:
+            tree_list = json.load(f)
+            
+        #  khởi tạo mô hình và đọc các siêu tham số cần thiết
+        xgb_model = cls()
+        attributes = json.loads(model['learner']['attributes']['scikit_learn'])
+        xgb_model.n_estimators = attributes['n_estimators']
+        xgb_model.learning_rate = attributes['learning_rate']
+        xgb_model.n_classes = attributes['n_classes_']
+        
+        # nạp cấu trúc cây thành phần
+        xgb_model.estimators = [XGBRegressionTree.load_tree(tree) for tree in tree_list]
+        return xgb_model

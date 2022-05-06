@@ -261,3 +261,32 @@ class XGBRegressionTree:
     
     def predict(self, X):
         return np.apply_along_axis(self._traverse_tree, 1, X, self.root)
+
+    def _read_tree_dict(self, tree_dict:dict):
+        '''
+        Tạo nút của cây dựa trên thông tin đã lưu.
+
+        Đầu vào:
+        - tree_dict (dict): từ điển lưu các thuộc tính của một nút.
+
+        Đầu ra:
+        - node (Node): nút của cây chứa các thông tin đọc được.
+        '''
+        node_val = tree_dict.get('leaf')
+
+        if node_val is not None:
+            node = Node(value=node_val)
+        else:
+            feature = int(tree_dict['split'][1:])
+            left_child = self._read_tree_dict(tree_dict['children'][0])
+            right_child = self._read_tree_dict(tree_dict['children'][1])
+
+            node = Node(feature, tree_dict['split_condition'], left_child, right_child)
+
+        return node
+
+    @classmethod
+    def load_tree(cls, tree_dict:dict):
+        tree = cls()
+        tree.root = tree._read_tree_dict(tree_dict)
+        return tree
