@@ -1,106 +1,151 @@
-import numpy as np
+from numba import njit
+from numpy import array, empty_like, empty, int32, float32, zeros
+from math import exp
+from queue import Queue
 import json
-from xgbtree import XGBRegressionTree, softmax
-from tqdm import tqdm
+
+@njit
+def softmax(arr:array):
+    result = empty_like(arr)
+    nrows, ncols = arr.shape
+
+    for i in range(nrows):
+        row_sum = 0
+        for j in range(ncols):
+            element_exp = exp(arr[i, j])
+            result[i, j] = element_exp
+            row_sum += element_exp
+
+        for j in range(ncols):
+            result[i, j] /= row_sum
+
+    return result
 
 
-class XGBClassifier:
+def load_tree(feature_arr:array, value_arr:array, tree_dict:dict):
     '''
-    Lớp đối tượng cài đặt mô hình XGBoost
+    Hàm đọc cấu trúc cây ở dạng từ điển.
+    Kết quả đọc được lưu vào mảng đặc trưng và giá trị truyền vào.
 
-    Tham khảo: - https://medium.com/analytics-vidhya/what-makes-xgboost-so-extreme-e1544a4433bb
+    Đầu vào:
+    - feature_arr, value_arr (numpy.array): mảng lưu đặc trưng và giá trị của các nút trong cây
+    - tree_dict (dict): thông tin về cây quyết định lưu ở dạng từ điển
     '''
-    def __init__(self, n_estimators=1, learning_rate=0.3,
-                        min_samples_split=2, max_depth=6, lambda_=1.) -> None:
-        '''
-        Khởi tạo mô hình XGBoost
+    # tạo hàng đợi FIFO các nút và chỉ mục tương ứng trong mảng
+    tree_q = Queue()
+    tree_q.put(tree_dict)
 
-        Đầu vào:
-        - n_estimator (int): số cây thành phần cho mô hình XGBoost.
-        - learning_rate (Optional[float], mặc định=0.3): trọng số dự đoán cho các cây thành phần.
-        - min_samples_split (int, mặc định=2): số đối tượng ít nhất để có thể phân nhánh.
-        - max_depth (Optional[int]): độ sâu tối đa của cây.
-        - lambda_ (float, mặc định=1): hệ số chính quy hóa L2
-        '''
-        self.n_estimators = n_estimators
-        self.learning_rate = learning_rate
-        self.min_samples_split=min_samples_split
-        self.max_depth=max_depth
-        self.lambda_ = lambda_
+    idx_q = Queue()
+    idx_q.put(0)
+
+    while not tree_q.empty():
+        node = tree_q.get()
+        idx = idx_q.get()
+
+        # xác định nút lá hay nút nhánh
+        # nếu có khóa 'leaf' là nút lá
+        node_val = node.get('leaf')
+        if node_val is None:
+            # lưu đặc trưng và giá trị ngưỡng phân nhánh
+            feature_arr[idx] = int32(node['split'][1:])
+            value_arr[idx] = float32(node['split_condition'])
+
+            # thêm vào hàng đợi thông tin và chỉ mục trong mảng của nút con
+            tree_q.put(node['children'][0])
+            tree_q.put(node['children'][1])
+
+            idx_q.put(2 * idx + 1)
+            idx_q.put(2 * idx + 2)
+        else:
+            feature_arr[idx] = -1 # giá trị đặc biệt thể hiện nút lá
+            value_arr[idx] = float32(node_val)
 
 
-    def fit(self, X, y):
-        self.estimators = [XGBRegressionTree(self.lambda_, self.min_samples_split, self.max_depth)
-                                    for _ in range(self.n_estimators)]
+def load_model(hyperparams_path:str, tree_path:str):
+    '''
+    Hàm đọc mô hình XGBoost đã lưu.
+    Mỗi cây trong mô hình được lưu thành mảng 1 chiều bao gồm 2 mảng đặc trưng và giá trị.
+    Mảng giá trị thê hiện giá trị phân nhánh hoặc nút lá tùy giá trị đặc trưng tại ô tương ứng.
 
-        self.n_samples, self.n_features = X.shape
-        self.n_classes, self.init_pred = np.unique(y, return_counts=True)
-        self.n_classes = len(self.n_classes)
+    Đầu vào:
+    - hyperparams_path, tree_path (str): lần lượt là đường dẫn tới tập tin lưu các siêu tham số
+    và lưu cấu trúc cây của mô hình.
 
-        self.init_pred = self.init_pred.astype(np.float32) / self.n_samples
-        y_pred = np.full((self.n_samples, self.n_classes), self.init_pred)
-        
-        for estimator in tqdm(self.estimators, 'fitting estimators'):
-            estimator.fit(X, y, y_pred)
+    Đầu ra:
+    - n_estimators (int): số (nhóm) cây thành phần của mô hình.
+    - n_classes (int): số phân lớp đã huấn luyện
+    - features (numpy.array): mảng thể hiện đặc trưng được xét tại nút trong cây.
+    - values (numpy.array): mảng thể hiện giá trị phân nhánh hoặc nút lá.
+    '''
+    # mở tập tin, phân tích cú pháp và lưu thông tin vào từ điển
+    with open(hyperparams_path) as f:
+        hyperparams = json.load(f)
 
-            update_pred = estimator.predict(X)
-            if np.isnan(update_pred).any():
-                np.savetxt('current_raw.csv', y_pred, fmt='%f', delimiter=',')
-                np.savetxt('update_raw.csv', update_pred, fmt='%f', delimiter=',')
-                raise ValueError('Leaf node(s) contain NaN(s)')
-                
-            y_pred += self.learning_rate * update_pred
-            y_pred -= y_pred.max(1, keepdims=True) # https://cs231n.github.io/linear-classify/#softmax
+    with open(tree_path) as f:
+        tree_list = json.load(f)
 
-        return self
+    # truy xuất các siêu tham số
+    attributes = json.loads(hyperparams['learner']['attributes']['scikit_learn'])
+    n_estimators = attributes['n_estimators']
+    n_classes = attributes['n_classes_']
+    max_depth = attributes['max_depth']
+    if max_depth is None:
+        max_depth = 6
 
-    def predict(self, X, prob=False, raw=False):
-        y_pred = np.zeros((X.shape[0], self.n_classes))
-        for i, estimator in enumerate(self.estimators):
-            update_pred = estimator.predict(X)
-            # y_pred[:, i % self.n_classes] += self.learning_rate * update_pred
-            y_pred[:, i % self.n_classes] += update_pred
+    # xác định số nút tối đa của cây thành phần và tạo mảng.
+    nrows = len(tree_list)
+    ncols = sum((2**i for i in range(max_depth+1)))
+    features = empty((nrows, ncols), int32)
+    values = empty((nrows, ncols), float32)
 
-        y_pred -= y_pred.max(1, keepdims=True) # https://cs231n.github.io/linear-classify/#softmax
-        if not raw:
-            y_pred = softmax(y_pred)
-            if not prob:
-                y_pred = np.argmax(y_pred, 1)
+    # đọc và nạp thông tin các cây vào mảng
+    for feat_arr, val_arr, tree in zip(features, values, tree_list):
+        load_tree(feat_arr, val_arr, tree)
 
-        return y_pred
+    return n_estimators, n_classes, features, values
 
-    def predict_proba(self, X):
-        return self.predict(X, True)
+@njit
+def traverse_tree(x:array, features_arr:array, values_arr:array):
+    '''
+    Hàm duyệt cây quyết định và đưa ra dự đoán chon một đối tượng.
 
-    def predict_raw(self, X):
-        return self.predict(X, raw=True)
+    Đầu vào:
+    - x (numpy.array): đối tượng dự đoán.
+    - features_arr, values_arr (numpy.array): mảng đặc trưng và giá trị của cây quyết định.
 
-    @classmethod
-    def load_model(cls, learner_path, tree_path):
-        '''
-        Đọc mô hình XGBoost đã được huấn luyện.
+    Đầu ra:
+    - value (float): giá trị dự đoán.
+    '''
+    idx = 0
 
-        Đầu vào:
-        - learner_path (str): đường dẫn tới tập tin json lưu thông tin chi tiết các siêu tham số của mô hình. 
-        Nội dung tập tin tương tự kết quả phương thức booster.save_model của thư viện xgboost.
-        - tree_path (str): đường dẫn tới tập tin json thể hiện cấu trúc các cây thành phần.
-        Nội dung tập tin tương tự kết quả phương thức booster.dump_model của thư viện xgboost.
-        '''
+    # kiểm tra nút lá
+    while features_arr[idx] != -1:
+        # so sánh giá trị đặc trưng của đối tượng và giá trị phân nhánh
+        # duyệt tới nút con phù hợp.
+        if x[features_arr[idx]] - values_arr[idx] < 0:
+            idx = 2 * idx + 1
+        else:
+            idx = 2 * idx + 2
 
-        # phâh tích cú pháp json và tạo từ điển các tham số của mô hình
-        with open(learner_path) as f:
-            model = json.load(f)
-            
-        with open(tree_path) as f:
-            tree_list = json.load(f)
-            
-        #  khởi tạo mô hình và đọc các siêu tham số cần thiết
-        xgb_model = cls()
-        attributes = json.loads(model['learner']['attributes']['scikit_learn'])
-        xgb_model.n_estimators = attributes['n_estimators']
-        xgb_model.learning_rate = attributes['learning_rate']
-        xgb_model.n_classes = attributes['n_classes_']
-        
-        # nạp cấu trúc cây thành phần
-        xgb_model.estimators = [XGBRegressionTree.load_tree(tree) for tree in tree_list]
-        return xgb_model
+    return values_arr[idx]
+
+@njit
+def predict_proba(X:array, features_arr:array, values_arr:array, n_classes:int32):
+    '''
+    Hàm dự đoán tập dữ liệu trên mô hình XGBoost được đọc.
+
+    Đầu vào:
+    - X (numpy.array): tập dữ liệu dự đoán.
+    - features_arr, values_arr (numpy.array): mảng đặc trưng và giá trị của cây quyết định.
+    - n_classes (int): số phân lớp được huấn luyện.
+
+    Đầu ra:
+    - y_pred (numpy.array): mảng dự đoán xác suất thuộc về các phân lớp của các đối tượng
+    '''
+    y_pred = zeros((X.shape[0], n_classes))
+
+    for i, x in enumerate(X):
+        for j, (f_arr, v_arr) in enumerate(zip(features_arr, values_arr)):
+            y_pred[i, j % n_classes] += traverse_tree(x, f_arr, v_arr)
+
+    return softmax(y_pred)
