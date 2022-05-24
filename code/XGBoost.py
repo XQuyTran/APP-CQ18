@@ -1,5 +1,5 @@
 from numba import njit
-from numpy import array, empty_like, empty, int32, float32, zeros
+from numpy import array, empty_like, empty, int32, float64, zeros
 from math import exp
 from queue import Queue
 import json
@@ -48,7 +48,7 @@ def load_tree(feature_arr:array, value_arr:array, tree_dict:dict):
         if node_val is None:
             # lưu đặc trưng và giá trị ngưỡng phân nhánh
             feature_arr[idx] = int32(node['split'][1:])
-            value_arr[idx] = float32(node['split_condition'])
+            value_arr[idx] = float64(node['split_condition'])
 
             # thêm vào hàng đợi thông tin và chỉ mục trong mảng của nút con
             tree_q.put(node['children'][0])
@@ -58,7 +58,7 @@ def load_tree(feature_arr:array, value_arr:array, tree_dict:dict):
             idx_q.put(2 * idx + 2)
         else:
             feature_arr[idx] = -1 # giá trị đặc biệt thể hiện nút lá
-            value_arr[idx] = float32(node_val)
+            value_arr[idx] = float64(node_val)
 
 
 def load_model(hyperparams_path:str, tree_path:str):
@@ -96,7 +96,7 @@ def load_model(hyperparams_path:str, tree_path:str):
     nrows = len(tree_list)
     ncols = sum((2**i for i in range(max_depth+1)))
     features = empty((nrows, ncols), int32)
-    values = empty((nrows, ncols), float32)
+    values = empty((nrows, ncols), float64)
 
     # đọc và nạp thông tin các cây vào mảng
     for feat_arr, val_arr, tree in zip(features, values, tree_list):

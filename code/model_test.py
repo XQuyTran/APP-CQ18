@@ -3,7 +3,7 @@ from xgboost import XGBClassifier
 from argparse import ArgumentParser
 from numpy import loadtxt
 from time import time
-from XGBpar import predict_proba_kernel
+from XGB_par_v0 import predict_proba_kernel
 import numpy as np
 
 def create_argument_parser():
