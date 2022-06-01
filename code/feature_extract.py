@@ -1,9 +1,74 @@
 import cv2 as cv, numpy as np
-from numba import njit, cuda
-import math
+from numba import njit
+from math import exp
 
 # phiên bản tự cài dặt
 # --------------------------------------------------------------------
+@njit
+def create_gaussian_blur_kernel(shape, sigma):
+    '''
+    Hàm tạo bộ lọc Gaussian có kích thước shape x shape với các giá trị có độ lệch chuẩn sigma.
+
+    Đầu vào:
+    - shape (int): kích thước bộ lọc
+    - sigma (float): độ lệch chuẩn.
+
+    Đầu ra:
+    - h  (np.array): bộ lọc Gaussian
+
+    Tham khảo:
+    https://stackoverflow.com/questions/8204645/implementing-gaussian-blur-how-to-calculate-convolution-matrix-kernel
+    '''
+    # numpy method
+    # h1 = np.full(shape, np.arange(-(shape[1] - 1) / 2, (shape[1] - 1) / 2))
+    # h2 = np.full(shape[::-1], np.arange(-(shape[0] - 1) / 2, (shape[0] - 1) / 2)).T
+
+    # hg = np.exp(-(h1 ** 2 + h2 ** 2) / (2 * sigma**2))
+    # return hg / np.sum(hg)
+
+    h1 = np.empty(shape)
+    h2 = np.empty(shape)
+
+    for i, val in enumerate(range(-(shape[1] - 1) / 2, (shape[1] - 1) / 2)):
+        h1[:, i] = val
+
+    for i, val in enumerate(range(-(shape[0] - 1) / 2, (shape[0] - 1) / 2)):
+        h2[i] = val
+
+    hg = np.empty(shape)
+    hg_sum = 0
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            hg[i, j] = exp(-(h1[i, j]**2 + h2[i, j]**2) / (2 * sigma**2))
+            hg_sum += hg[i, j]
+
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            hg[i, j] /= hg_sum
+
+    return hg
+
+@njit
+def gaussian_blur(image, kernel_shape, sigma):
+    kernel = create_gaussian_blur_kernel(kernel_shape, sigma)
+    start_id = kernel.shape[0] // 2
+    last_row = image.shape[0] - 1
+    last_col = image.shape[1] - 1
+
+    out = np.empty_like(image)
+    for r in range(image.shape[0]):
+        r_start = r - start_id
+        for c in range(image.shape[1]):
+            c_start = c - start_id
+            for filter_r in range(kernel_shape[0]):
+                for filter_c in range(kernel_shape[1]):
+                    in_r = min(max(0, r_start + filter_r), last_row)
+                    in_c = min(max(0, c_start + filter_c), last_col)
+
+                    out[r, c] += image[in_r, in_c] * kernel[in_r, in_c]
+
+    return out
+
 def applyCannyThreshold(frame, val):
     ratio = 1.2
     kernel_size = 3
