@@ -1,4 +1,4 @@
-from XGBoost import load_model, predict_proba
+from XGBoost import load_model
 from xgboost import XGBClassifier
 from argparse import ArgumentParser
 from time import time
@@ -8,7 +8,7 @@ import numpy as np
 import warnings
 
 from XGB_par_v0 import predict_proba_kernel
-from XGB_par_v1 import predict_proba_kernel1
+# from XGB_par_v1 import predict_proba_kernel1
 
 from feature_extract import getFigureForImage
 from feature_extract_v1 import getFigureForImage3, compare_gray
@@ -27,7 +27,7 @@ def create_argument_parser():
     parser.add_argument('-d', help='đường dẫn tới thư mục hình đầu vào')
     parser.add_argument('-i', '--image', help='đường dẫn tới hình đầu vào')
     parser.add_argument('--npy', help='đường dẫn tới tập tin đặc trưng đã trích xuất')
-    parser.add_argument('-b', '--blockSize', type=int, default=0)
+    parser.add_argument('-b', '--blockSize', type=int, default=32)
     
     return parser
 
@@ -50,7 +50,6 @@ if __name__ == '__main__':
         test_ls = sorted(test_ls, key=get_sort_key)
 
         # rút trích đặc trưng - tự cài đặt
-        print('')
         image_features = [getFigureForImage3(path) for path in tqdm(test_ls, 'self implement')]
         X_test = np.vstack(image_features)
     
@@ -83,31 +82,29 @@ if __name__ == '__main__':
     n_estimators, n_classes, features, values = load_model(args.learner_path, args.tree_path)
     
     # đọc mô hình và dự đoán - thư viện xgboost
+    print( 'XGBoost prediction')
+
     xgblib_model = XGBClassifier(objective='multi:softmax', use_label_encoder=False,
                                                     num_class=n_classes, n_estimators=n_estimators, learning_rate=0.2)
 
     xgblib_model.load_model(args.learner_path)    
+
+    start = time()
     xgblib_pred = xgblib_model.predict(X_test)
+    print(f'library: {(time() - start)*1000:f}ms')
 
     # đọc mô hình và dự đoán - tự cài đặt
-    print( 'XGBoost prediction')
         
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
 
         start = time()
         xgb_pred_1 = predict_proba_kernel(X_test, features, values, n_classes, args.blockSize)
-        print(f'prediction (parallel_v0) {(time() - start)*1000:f}ms')
-        print(f'error with xgboost library classifier: {np.count_nonzero(np.argmax(xgb_pred_1, 1) - xgblib_pred)}', '\n')
+        print(f'prediction: {(time() - start)*1000:f}ms')
 
-        start = time()
-        xgb_pred_2 = predict_proba_kernel1(X_test, features, values, n_classes, args.blockSize)
-        print(f'prediction (parallel_v1) {(time() - start)*1000:f}ms')
-        print(f'error with xgboost library classifier: {np.count_nonzero(np.argmax(xgb_pred_2, 1) - xgblib_pred)}')
-    
+        print(f'error with xgboost library classifier: {np.count_nonzero(np.argmax(xgb_pred_1, 1) - xgblib_pred)}')
 
-    # print("classes: ['healthy', 'multiple_diseases', 'rust', 'scab']")
-    # print(f'pred: \t\t{xgb_pred}')
-    # if args.blockSize > 0:
-    #     print(f'pred1: \t\t{xgb_pred_1}')
-    # print(f'pred (library): {xgblib_pred}')
+        # start = time()
+        # xgb_pred_2 = predict_proba_kernel1(X_test, features, values, n_classes, args.blockSize)
+        # print(f'prediction (parallel_v1) {(time() - start)*1000:f}ms')
+        # print(f'error with xgboost library classifier: {np.count_nonzero(np.argmax(xgb_pred_2, 1) - xgblib_pred)}')

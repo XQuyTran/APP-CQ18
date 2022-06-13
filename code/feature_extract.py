@@ -1,71 +1,135 @@
-import cv2 as cv, numpy as np
+import cv2 as cv, numpy as np, math
 from numba import njit
-from math import exp
 
 # phiên bản tự cài dặt
 # --------------------------------------------------------------------
 @njit
-def create_gaussian_blur_kernel(shape, sigma):
+def convert_rgb2gray(in_pixels, out_pixels):
+    '''
+    Convert color image to grayscale image.
+ 
+    in_pixels : numpy.ndarray with shape=(h, w, 3)
+                h, w is height, width of image
+                3 is colors with BGR (blue, green, red) order
+        Input RGB image
+    
+    out_pixels : numpy.ndarray with shape=(h, w)
+        Output image in grayscale
+    '''
+    for r in range(len(in_pixels)):
+        for c in range(len(in_pixels[0])):
+            out_pixels[r, c] = (in_pixels[r, c, 0] * 0.114 + 
+                                in_pixels[r, c, 1] * 0.587 + 
+                                in_pixels[r, c, 2] * 0.299)
+    return out_pixels
+
+def get_gaussian_kernel(ksize, sigma):
     '''
     Hàm tạo bộ lọc Gaussian có kích thước shape x shape với các giá trị có độ lệch chuẩn sigma.
 
     Đầu vào:
-    - shape (int): kích thước bộ lọc
+    - ksize (int): kích thước bộ lọc
     - sigma (float): độ lệch chuẩn.
 
     Đầu ra:
-    - h  (np.array): bộ lọc Gaussian
+    - kernel (np.array): bộ lọc Gaussian
 
     Tham khảo:
     https://stackoverflow.com/questions/8204645/implementing-gaussian-blur-how-to-calculate-convolution-matrix-kernel
+    https://github.com/opencv/opencv/blob/4.x/modules/imgproc/src/smooth.dispatch.cpp
     '''
-    # numpy method
-    # h1 = np.full(shape, np.arange(-(shape[1] - 1) / 2, (shape[1] - 1) / 2))
-    # h2 = np.full(shape[::-1], np.arange(-(shape[0] - 1) / 2, (shape[0] - 1) / 2)).T
+    if ksize == 1:
+        kernel = np.array([1.])
+    elif ksize == 3:
+        kernel = np.array([0.25, 0.5, 0.25])
+    elif ksize == 5:
+        kernel = np.array([0.0625, 0.25, 0.375, 0.25, 0.0625])
+    elif ksize == 7:
+        kernel = np.array([0.03125, 0.109375, 0.21875, 0.21875, 0.21875, 0.109375, 0.03125])
+    else:
+        if sigma <= 0:
+            sigma = 0.3 * ((ksize - 1) * 0.5 - 1) + 0.8
 
-    # hg = np.exp(-(h1 ** 2 + h2 ** 2) / (2 * sigma**2))
-    # return hg / np.sum(hg)
+        G = lambda x: math.exp(-(x - (ksize - 1) / 2)**2 / (2 * sigma**2))
+        kernel = np.array([G(x) for x in range(ksize)])
+        kernel /= kernel.sum()
 
-    h1 = np.empty(shape)
-    h2 = np.empty(shape)
-
-    for i, val in enumerate(range(-(shape[1] - 1) / 2, (shape[1] - 1) / 2)):
-        h1[:, i] = val
-
-    for i, val in enumerate(range(-(shape[0] - 1) / 2, (shape[0] - 1) / 2)):
-        h2[i] = val
-
-    hg = np.empty(shape)
-    hg_sum = 0
-    for i in range(shape[0]):
-        for j in range(shape[1]):
-            hg[i, j] = exp(-(h1[i, j]**2 + h2[i, j]**2) / (2 * sigma**2))
-            hg_sum += hg[i, j]
-
-    for i in range(shape[0]):
-        for j in range(shape[1]):
-            hg[i, j] /= hg_sum
-
-    return hg
+    return kernel
 
 @njit
-def gaussian_blur(image, kernel_shape, sigma):
-    kernel = create_gaussian_blur_kernel(kernel_shape, sigma)
-    start_id = kernel.shape[0] // 2
+def apply_kernel(image, kernel):
+    '''
+    Hàm thực hiện phép tích chập 2 chiều giữa ảnh image và bộ lọc kernel.
+    Tại vùng biên, phần tử lân cận gần nhất được chọn làm phần tử đệm.
+    Độ dời khi duyệt là 1.
+
+    Đầu vào:
+    - image (np.array): ảnh đầu vào.
+    - kernel (np.array): bộ lọc
+
+    Đầu ra:
+    - out (np.array): ảnh đã được áp dụng bộ lọc.
+    '''
+    image = np.atleast_3d(image)
+    offset = (kernel.shape[0] // 2, kernel.shape[1] // 2)
     last_row = image.shape[0] - 1
     last_col = image.shape[1] - 1
 
-    out = np.empty_like(image)
-    for r in range(image.shape[0]):
-        r_start = r - start_id
-        for c in range(image.shape[1]):
-            c_start = c - start_id
-            for filter_r in range(kernel_shape[0]):
-                for filter_c in range(kernel_shape[1]):
-                    in_r = min(max(0, r_start + filter_r), last_row)
-                    in_c = min(max(0, c_start + filter_c), last_col)
+    out = np.zeros_like(image, np.uint8)
+    out_pixel = np.zeros(image.shape[-1], np.float32)
 
-                    out[r, c] += image[in_r, in_c] * kernel[in_r, in_c]
+    for out_r in range(image.shape[0]):
+        for out_c in range(image.shape[1]):
+            for filter_r, r in enumerate(range(out_r - offset[0], out_r + offset[0] + 1)):
+                for filter_c, c in enumerate(range(out_c - offset[1], out_c + offset[1] + 1)):
+                    in_r = min(max(0, r), last_row)
+                    in_c = min(max(0, c), last_col)
+
+                    out_pixel += image[in_r, in_c] * kernel[filter_r, filter_c]
+
+            out[out_r, out_c] = np.floor(out_pixel).astype(np.uint8)
+            out_pixel -= out_pixel
+
+    return out
+
+def create_gaussian_filter(ksize, sigmaX, sigmaY=0):
+    '''
+    Hàm tạo bộ lọc Gauss
+
+    Đầu vào:
+    - ksize (tuple): kích thước bộ lọc Gauss, thể hiện số dòng, số cột.
+    - sigmaX, sigmaY (float): độ lệch chuẩn cho giá trị bộ lọc theo chiều dọc và ngang.
+
+    Đầu ra
+    - kernel (np.array): bộ lọc Gauss
+    '''
+    kernel_x = get_gaussian_kernel(ksize[0], sigmaX)
+    kernel_x = np.expand_dims(kernel_x, 1)
+
+    if sigmaY == 0:
+        sigmaY = sigmaX
+    kernel_y = get_gaussian_kernel(ksize[1], sigmaY)
+    kernel_y = np.expand_dims(kernel_y, 0)
+
+    return kernel_x @ kernel_y
+
+def gaussian_blur(image, ksize, sigmaX, sigmaY=0):
+    '''
+    Hàm làm mờ ảnh sử dụng bộ lọc Gauss.
+
+    Đầu vào:
+    - image (np.array): ảnh đầu vào.
+    - ksize (tuple): kích thước bộ lọc Gauss, thể hiện số dòng, số cột.
+    - sigmaX, sigmaY (float): độ lệch chuẩn cho giá trị bộ lọc theo chiều dọc và ngang.
+
+    Đầu ra
+    - blur (np.array): ảnh kết quả sau khi áp dụng bộ lọc
+    '''
+    kernel = create_gaussian_filter(ksize, sigmaX, sigmaY)
+
+    out = apply_kernel(image, kernel)
+    if len(image.shape) != len(out.shape):
+        out.shape = image.shape
 
     return out
 
@@ -73,12 +137,13 @@ def applyCannyThreshold(frame, val):
     ratio = 1.2
     kernel_size = 3
     low_threshold = val
+
     img_blur = cv.GaussianBlur(frame, (3, 3), 0)
+    
     detected_edges = cv.Canny(img_blur, low_threshold, low_threshold*ratio, kernel_size)
     mask = detected_edges != 0
     dst = frame * (mask[:,:].astype(frame.dtype))
     return dst
-
 
 @njit
 def zipImage(src, zip_x, zip_y, ratio):
@@ -89,6 +154,7 @@ def zipImage(src, zip_x, zip_y, ratio):
     rs, cs = src.shape
     zip_rs = int(rs / zip_y)
     zip_cs = int(cs / zip_x)
+
     for idx in range(0, zip_rs * zip_y, zip_y):
         for jdx in range(0, zip_cs * zip_x, zip_x):
             block_img = src[idx : idx + zip_y, jdx : jdx + zip_x]
@@ -101,7 +167,7 @@ def zipImage(src, zip_x, zip_y, ratio):
     return src
 
 @njit
-def joinNeiboorPixel(src, zip_x, zip_y, mask_size, ratio):
+def joinNeighborPixel(src, zip_x, zip_y, mask_size, ratio):
     '''
     Hàm dùng để liên kết các ô xung quanh để lấp khuyết sẽ trả ra kết quả là một ma trận mask.
     '''
@@ -109,6 +175,7 @@ def joinNeiboorPixel(src, zip_x, zip_y, mask_size, ratio):
     zip_rs = int(rs / zip_y)
     zip_cs = int(cs / zip_x)
     half = int(mask_size / 2)
+
     dst = src.copy()
     for idx in range(half , zip_rs - half):
         for jdx in range(half, zip_cs - half):
@@ -116,11 +183,14 @@ def joinNeiboorPixel(src, zip_x, zip_y, mask_size, ratio):
             end_row_mask = (idx + half + 1) * zip_y
             start_col_mask = (jdx - half) * zip_x
             end_col_mask = (jdx + half + 1) * zip_x
+
             mask_block = src[start_row_mask : end_row_mask, start_col_mask : end_col_mask]
             block_img = dst[idx * zip_y : (idx + 1) * zip_y, jdx * zip_x : (jdx + 1) * zip_x]
+
             num_pixel = np.sum(mask_block > 0)
             if num_pixel >= mask_size * mask_size * zip_x * zip_y * ratio:
                 block_img[:,:] = 1
+                
     return dst
 
 
@@ -242,14 +312,18 @@ def getFigureForImage2(path):
     img = cv.imread(path)
     
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    gray = gray.astype(np.uint8)
-    gray = cv.GaussianBlur(gray, (3, 3), 0)
+    # gray = gray.astype(np.uint8)
+    # gray = cv.GaussianBlur(gray, (3, 3), 0)
+    gray = gaussian_blur(gray, (3, 3), 0)
+    # gray = gray.reshape(gray.shape[:2])
 
     mask_img = applyCannyThreshold(gray, 12)
+
     mask_img = zipImage(mask_img, 8, 8, 0.12)
     mask_img = zipImage(mask_img, 16, 16, 0.2)
-    mask_img = joinNeiboorPixel(mask_img, 8, 8, 3, 0.15)
-    mask_img = joinNeiboorPixel(mask_img, 16, 16, 3, 1 / 3)
+
+    mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
+    mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
 
     for chanel in range(0, 3):
         img[:,:,chanel] = img[:,:,chanel] * mask_img
@@ -304,10 +378,12 @@ def getFigureForImage(path):
     gray = cv.GaussianBlur(gray, (3, 3), 0)
 
     mask_img = applyCannyThreshold(gray, 12)
+
     mask_img = zipImage(mask_img, 8, 8, 0.12)
     mask_img = zipImage(mask_img, 16, 16, 0.2)
-    mask_img = joinNeiboorPixel(mask_img, 8, 8, 3, 0.15)
-    mask_img = joinNeiboorPixel(mask_img, 16, 16, 3, 1 / 3)
+
+    mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
+    mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
 
     for chanel in range(3):
         img[:,:,chanel] = img[:,:,chanel] * mask_img
