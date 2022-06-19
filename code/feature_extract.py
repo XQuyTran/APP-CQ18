@@ -3,6 +3,7 @@ from numba import njit
 
 # phiên bản tự cài dặt
 # --------------------------------------------------------------------
+
 @njit
 def convert_rgb2gray(in_pixels, out_pixels):
     '''
@@ -286,7 +287,7 @@ def compute_hist(img, hist):
             img: numpy.ndarray with shape=(h, w, 3)
             hist: numpy.ndarray with shape=(8,8,8)
     '''
-    h, w,d = img.shape[:3] 
+    h, w = img.shape[:2] 
     for i in range(h): 
         for j in range(w): 
             x,y,z=img[i][j][0]//32,img[i][j][1]//32,img[i][j][2]//32
@@ -294,19 +295,29 @@ def compute_hist(img, hist):
     return hist
 
 def fd_histogram2(image, mask=None):
-    bins = 8
     # convert the image to HSV color-space
     image = cv.cvtColor(image, cv.COLOR_BGR2HSV)
 
     # compute the color histogram
-    hist = np.zeros((8,8,8), np.float32) 
+    hist = np.zeros((8,8,8), np.float64) 
     hist  = compute_hist(image,hist)
 
     # normalize the histogram
     cv.normalize(hist, hist)
 
     # return the histogram
-    return hist.flatten()
+    return hist.ravel()
+
+def fd_hu_moments2(gray_image):
+    # image=convert_rgb2gray_use_kernel(image)
+    # image = image.astype(np.uint8)
+    m=np.zeros((4, 4), dtype=np.float64)
+    mu=np.zeros((4, 4), dtype=np.float64)
+    nu=np.zeros((4, 4), dtype=np.float64)
+    hu=np.zeros(7,np.float64)
+
+    feature = cvHuMoments(cvMoments(gray_image, m, mu, nu), hu)
+    return feature
 
 def getFigureForImage2(path):
     img = cv.imread(path)
@@ -314,10 +325,10 @@ def getFigureForImage2(path):
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     # gray = gray.astype(np.uint8)
     # gray = cv.GaussianBlur(gray, (3, 3), 0)
-    gray = gaussian_blur(gray, (3, 3), 0)
+    blur = gaussian_blur(gray, (3, 3), 0)
     # gray = gray.reshape(gray.shape[:2])
 
-    mask_img = applyCannyThreshold(gray, 12)
+    mask_img = applyCannyThreshold(blur, 12)
 
     mask_img = zipImage(mask_img, 8, 8, 0.12)
     mask_img = zipImage(mask_img, 16, 16, 0.2)
@@ -325,27 +336,15 @@ def getFigureForImage2(path):
     mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
     mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
 
-    for chanel in range(0, 3):
-        img[:,:,chanel] = img[:,:,chanel] * mask_img
-
-    hist_figure = fd_histogram2(img).astype(np.float64)
+    # for chanel in range(img.shape[-1]):
+    #     img[:,:,chanel] = img[:,:,chanel] * mask_img
+    img *= np.atleast_3d(mask_img)
+    
+    hist_figure = fd_histogram2(img)
 
     #huMoments
-    m=np.zeros((4, 4), dtype=np.float64)
-    mu=np.zeros((4, 4), dtype=np.float64)
-    nu=np.zeros((4, 4), dtype=np.float64)
-
-    # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-
-    height, width = img.shape[:2]
-    gray_img = np.empty((height, width), dtype=img.dtype)
-
-    img=convert_rgb2gray(img,gray_img)
-    nu2=cvMoments(img,m,mu,nu)
-
-    hu=np.zeros(7,float) 
-    hu_moments = cvHuMoments(nu2, hu)
-
+    hu_moments = fd_hu_moments2(gray)
+     
     fig = np.concatenate((hist_figure, hu_moments))
     return fig
 
