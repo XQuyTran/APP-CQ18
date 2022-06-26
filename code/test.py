@@ -103,7 +103,9 @@ def run_parallel(args, features, values, n_classes):
     if args.parallel_version == 0:
         print('v0')
     elif args.parallel_version == 1:
-        print()
+        print('v1')
+    elif args.parallel_version == 2:
+        print('v2')
 
     if args.d is not None:
         test_ls = glob(f'{args.d}/Test_*')
@@ -139,7 +141,7 @@ def run_parallel(args, features, values, n_classes):
 
 def compare(features, predictions):
     print(f'\nfeatures mean error: {np.abs(features[0] - features[1]).mean()}')
-    print(f'error with xgboost library classifier: {np.count_nonzero(predictions[0] - predictions[1])}')
+    print(f'error with xgboost library classifier: {np.count_nonzero(predictions[0] != predictions[1])}')
 
 
 if __name__ == '__main__':
@@ -152,8 +154,12 @@ if __name__ == '__main__':
     if args.parallel_version == -1:
         base_X_test, xgb_base_pred = run_library(args, n_estimators, n_classes)
         X_test, xgb_pred = run_sequential(args, features, values, n_classes)
+        np.savez('sequential.npz', seq_X_test=X_test, xgb_seq_pred=xgb_pred)
     else:
-        base_X_test, xgb_base_pred = run_sequential(args, features, values, n_classes)
+        # base_X_test, xgb_base_pred = run_sequential(args, features, values, n_classes)
+        with np.load('sequential.npz') as features_n_pred:
+            base_X_test = features_n_pred['seq_X_test']
+            xgb_base_pred = features_n_pred['xgb_seq_pred']
 
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')

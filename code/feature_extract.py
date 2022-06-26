@@ -19,7 +19,7 @@ def convert_rgb2gray(in_pixels, out_pixels):
     '''
     for r in range(len(in_pixels)):
         for c in range(len(in_pixels[0])):
-            out_pixels[r, c] = (in_pixels[r, c, 0] * 0.114 + 
+            out_pixels[r, c] = round(in_pixels[r, c, 0] * 0.114 + 
                                 in_pixels[r, c, 1] * 0.587 + 
                                 in_pixels[r, c, 2] * 0.299)
     return out_pixels
@@ -300,7 +300,7 @@ def fd_histogram2(image, mask=None):
 
     # compute the color histogram
     hist = np.zeros((8,8,8), np.float64) 
-    hist  = compute_hist(image,hist)
+    hist = compute_hist(image,hist)
 
     # normalize the histogram
     cv.normalize(hist, hist)
@@ -323,10 +323,12 @@ def getFigureForImage2(path):
     img = cv.imread(path)
     
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    # gray = gray.astype(np.uint8)
-    # gray = cv.GaussianBlur(gray, (3, 3), 0)
-    blur = gaussian_blur(gray, (3, 3), 0)
-    # gray = gray.reshape(gray.shape[:2])
+    #gray = np.zeros(img.shape[:2], np.uint8)
+    #gray = convert_rgb2gray(img, gray)
+    
+    
+    blur = cv.GaussianBlur(gray, (3, 3), 0)
+    # blur = gaussian_blur(gray, (3, 3), 0)
 
     mask_img = applyCannyThreshold(blur, 12)
 
@@ -336,11 +338,10 @@ def getFigureForImage2(path):
     mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
     mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
 
-    # for chanel in range(img.shape[-1]):
-    #     img[:,:,chanel] = img[:,:,chanel] * mask_img
-    img *= np.atleast_3d(mask_img)
+    for chanel in range(img.shape[-1]):
+        img[:,:,chanel] = img[:,:,chanel] * mask_img
     
-    hist_figure = fd_histogram2(img)
+    hist_figure = fd_histogram2(img).astype(np.float64)
 
     #huMoments
     hu_moments = fd_hu_moments2(gray)
@@ -356,13 +357,13 @@ def fd_histogram(image):
     image = cv.cvtColor(image, cv.COLOR_BGR2HSV)
 
     # compute the color histogram
-    hist  = cv.calcHist([image], [0, 1, 2], None, [bins, bins, bins], [0, 255, 0, 255, 0, 255])
+    hist  = cv.calcHist([image], [0, 1, 2], None, [bins, bins, bins], [0, 256, 0, 256, 0, 256])
 
     # normalize the histogram
     cv.normalize(hist, hist)
 
     # return the histogram
-    return hist.flatten()
+    return hist.ravel()
 
 def fd_hu_moments(image):
     image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
