@@ -1,10 +1,17 @@
 from numba import cuda
-from feature_extract_v0 import (BLOCK_SIZE, convert_rgb2gray_use_kernel,
+from feature_extract_v0 import (BLOCK_SIZE, convert_rgb2gray_kernel,
                                                     gaussian_blur_kernel)
 import math, numpy as np
-from cv2 import imread, normalize, cvtColor, COLOR_BGR2HSV
+import cv2 as cv
 
-from feature_extract import applyCannyThreshold
+from feature_extract import applyCannyThreshold, zipImage, joinNeighborPixel, fd_histogram2
+
+# BLOCK_SIZE_1=32
+BLOCK_SIZE_2 = (32, 32)
+# width=1365
+# height=2048
+# grid_size_2 = (math.ceil(width / BLOCK_SIZE_2[0]),math.ceil(height / BLOCK_SIZE_2[1]))
+# grid_size_1 = math.ceil(width*height/ BLOCK_SIZE_1)
 
 @cuda.jit
 def conv_no_padding_ones_kernel(src, ksize, out):
@@ -135,6 +142,7 @@ def joinNeighborPixelKernel(src, zip_x, zip_y, mask_size, ratio, block_size=(32,
 
     return d_src
 
+
 @cuda.jit
 def m_ij_k(img,m_,i,j): # img 
     temp_ij=0
@@ -142,26 +150,30 @@ def m_ij_k(img,m_,i,j): # img
     if r < img.shape[0] and c < img.shape[1]:
         temp_ij=img[r,c]*(r**i)*(c**j)
         cuda.atomic.add(m_, (i,j),temp_ij)
-
-
-def cvHuMoments_kernel(d_in_img):
-    m_=np.zeros((4, 4), dtype=np.float64)
-    mu_=np.zeros((4, 4), dtype=np.float64)
-    nu_=np.zeros((4, 4), dtype=np.float64)
-    hu_=np.zeros(7,np.float64) 
-
-    # tính m_
-    d_m_ = cuda.to_device(m_)
-    grid_size = (math.ceil(d_in_img.shape[1] / BLOCK_SIZE[0]),
-                        math.ceil(d_in_img.shape[1] / BLOCK_SIZE[1]))
+        cuda.syncthreads()
+        
+def m_1_kernel(img,m_): # img 
+    grid_size_2 = (math.ceil(img.shape[0] / BLOCK_SIZE_2[0]),
+                            math.ceil(img.shape[1] / BLOCK_SIZE_2[1]))
     for i in range(4):
         for j in range(4):
             if (i,j) not in [(1,3),(2,2),(2,3)]:      
-                m_ij_k[grid_size, BLOCK_SIZE](d_in_img, d_m_, i, j)
+                m_ij_k[grid_size_2, BLOCK_SIZE_2](img,m_,i,j)      
+            if i==3:    
+                break
+
+
+def cvHuMoments_kernel(d_in_img,m_,mu_,nu_,hu_):
+    grid_size_2 = (math.ceil(d_in_img.shape[0] / BLOCK_SIZE_2[0]),
+                        math.ceil(d_in_img.shape[1] / BLOCK_SIZE_2[1]))
+    # tính m_
+    for i in range(4):
+        for j in range(4):
+            if (i,j) not in [(1,3),(2,2),(2,3)]:      
+                m_ij_k[grid_size_2, BLOCK_SIZE_2](d_in_img,m_,i,j)      
         if i==3:    
             break
 
-    m_ = d_m_.copy_to_host(m_)
     # xbar ybar
     xbar=m_[1,0]/m_[0,0]
     ybar=m_[0,1]/m_[0,0]
@@ -190,8 +202,6 @@ def cvHuMoments_kernel(d_in_img):
     hu_[6] = (3*nu_[2][1] - nu_[0][3])*(nu_[2][1] + nu_[0][3])*(3*(nu_[3][0] + nu_[1][2])**2-(nu_[2][1] + nu_[0][3])**2) -\
           (nu_[3][0] - 3*nu_[1][2])*(nu_[1][2] + nu_[0][3])*(3*(nu_[3][0] + nu_[1][2])**2-(nu_[2][1] + nu_[0][3])**2)
 
-    return hu_
-
 
 @cuda.jit
 def apply_mask_kernel(image, mask):
@@ -202,39 +212,32 @@ def apply_mask_kernel(image, mask):
 
 
 @cuda.jit
-def _histogram_kernel(d_input,dhist):
+def histogram_kernel(d_input,dhist): # khởi tạo hist device, check 
     '''
-    2d & 1d
+    3d & 3d
+
     '''
-    i = cuda.grid(1)
-    if i < d_input.size:
-        x,y,z=d_input[i][0]//32,d_input[i][1]//32,d_input[i][2]//32
-        index=x*8*8 +y*8 + z
-        cuda.atomic.add(dhist,index, 1)
+    r,c = cuda.grid(2)
+    if r < d_input.shape[0] and c < d_input.shape[1]:
+        x,y,z=d_input[r][c][0]//32,d_input[r][c][1]//32,d_input[r][c][2]//32
+        cuda.atomic.add(dhist,(x,y,z), 1)
 
-def histogram_kernel(image, block_size):
-    hsv_image = cvtColor(image, COLOR_BGR2HSV)
-    d_hsv_image = cuda.to_device(hsv_image)
-
-    d_flat_image = d_hsv_image.reshape(-1, d_hsv_image.shape[-1])
-    hist_figure = np.zeros(8*8*8, np.float32)
-
-    grid_size = math.ceil(d_flat_image.shape[0] / block_size[0])
-    _histogram_kernel[grid_size, block_size[0]](d_flat_image, hist_figure)
-
-    normalize(hist_figure, hist_figure)
-
-    return hist_figure.ravel()
 
 def getFigureForImage4(path):
-    img = imread(path)
+    img = cv.imread(path)
 
-    d_img = cuda.to_device(img)
-    d_gray = convert_rgb2gray_use_kernel(d_img)
-    d_gray = gaussian_blur_kernel(d_gray, (3, 3), 0)
-    gray = d_gray.copy_to_host()
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    gray = cv.GaussianBlur(gray, (3, 3), 0)
 
     mask_img = applyCannyThreshold(gray, 12)
+
+    # mask_img = zipImage(mask_img, 8, 8, 0.12)
+    # mask_img = zipImage(mask_img, 16, 16, 0.2)
+    # mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
+    # mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
+
+    # for chanel in range(0, 3):
+    #     img[:,:,chanel] = img[:,:,chanel] * mask_img
 
     mask_img = zipImageKernel(mask_img, 8, 8, 0.12, BLOCK_SIZE)
     mask_img = zipImageKernel(mask_img, 16, 16, 0.2, BLOCK_SIZE)
@@ -242,14 +245,70 @@ def getFigureForImage4(path):
     mask_img = joinNeighborPixelKernel(mask_img, 8, 8, 3, 0.15, BLOCK_SIZE)
     mask_img = joinNeighborPixelKernel(mask_img, 16, 16, 3, 1 / 3, BLOCK_SIZE)
 
-    grid_size = (math.ceil(img.shape[1] / BLOCK_SIZE[0]),
-                        math.ceil(img.shape[0] / BLOCK_SIZE[1]))
-    apply_mask_kernel[grid_size, BLOCK_SIZE](d_img, mask_img)
+    grid_size_2 = (math.ceil(img.shape[0] / BLOCK_SIZE_2[0]),
+                        math.ceil(img.shape[1] / BLOCK_SIZE_2[1]))
+
+    d_in_img = cuda.to_device(img)
+    apply_mask_kernel[grid_size_2, BLOCK_SIZE_2](d_in_img, mask_img)
+
     
-    img = d_img.copy_to_host(img)
-    hist_figure = histogram_kernel(img, BLOCK_SIZE)
+    # gray
+    # d_in_img = cuda.to_device(img)
+    d_gray_img = cuda.device_array(img.shape[:2], dtype=np.uint8)
+    convert_rgb2gray_kernel[grid_size_2, BLOCK_SIZE_2](d_in_img, d_gray_img)
+    
 
-    hu_monents = cvHuMoments_kernel(d_gray)
+    #huMoments
+    m=np.zeros((4, 4), dtype=np.float64)
+    mu=np.zeros((4, 4), dtype=np.float64)
+    nu=np.zeros((4, 4), dtype=np.float64)
+    hu=np.zeros(7,np.float64) 
+    d_m = cuda.to_device(m)
+    d_mu = cuda.to_device(mu)
+    d_nu = cuda.to_device(nu)
+    d_hu = cuda.to_device(hu)
+    cvHuMoments_kernel(d_gray_img,d_m,d_mu,d_nu,d_hu)
+    hu_moments =d_hu.copy_to_host()
 
-    fig = np.concatenate((hist_figure, hu_monents))
+    #hist
+    hist_figure = fd_histogram2(img).astype(np.float64)
+
+    # hist_figure = np.zeros((8,8,8), np.float32) 
+    # d_hist = cuda.to_device(hist_figure)
+    # histogram_kernel[grid_size_2, BLOCK_SIZE_2](d_in_img,d_hist)
+    # hist_figure =d_hist.copy_to_host()
+    # cv.normalize(hist_figure, hist_figure)
+
+    fig = np.concatenate((hist_figure.astype(np.float64).flatten(), hu_moments))
     return fig
+
+# def getFigureForImage4(path):
+#     img = cv.imread(path)
+
+#     # d_img = cuda.to_device(img)
+#     # d_gray = convert_rgb2gray_use_kernel(d_img)
+#     # d_gray = gaussian_blur_kernel(d_gray, (3, 3), 0)
+#     # gray = d_gray.copy_to_host()
+
+#     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+#     gray = cv.GaussianBlur(gray, (3, 3), 0)
+    
+#     mask_img = applyCannyThreshold(gray, 12)
+
+#     mask_img = zipImageKernel(mask_img, 8, 8, 0.12, BLOCK_SIZE)
+#     mask_img = zipImageKernel(mask_img, 16, 16, 0.2, BLOCK_SIZE)
+    
+#     mask_img = joinNeighborPixelKernel(mask_img, 8, 8, 3, 0.15, BLOCK_SIZE)
+#     mask_img = joinNeighborPixelKernel(mask_img, 16, 16, 3, 1 / 3, BLOCK_SIZE)
+
+#     grid_size = (math.ceil(img.shape[1] / BLOCK_SIZE[0]),
+#                         math.ceil(img.shape[0] / BLOCK_SIZE[1]))
+#     apply_mask_kernel[grid_size, BLOCK_SIZE](img, mask_img)
+    
+#     # img = d_img.copy_to_host(img)
+#     hist_figure = histogram_kernel(img, BLOCK_SIZE)
+
+#     hu_monents = cvHuMoments_kernel(gray)
+
+#     fig = np.concatenate((hist_figure, hu_monents))
+#     return fig

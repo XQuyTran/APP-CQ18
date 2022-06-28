@@ -135,11 +135,11 @@ def convert_rgb2gray_use_kernel(image):
 def getFigureForImage3(path):
     img = cv.imread(path)
 
-    gray = convert_rgb2gray_use_kernel(img)
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     # gray = gray.astype(np.uint8)
-    # gray = cv.GaussianBlur(gray, (3, 3), 0)
-    d_gray = gaussian_blur_kernel(gray, (3, 3), 0)
-    gray = d_gray.copy_to_host()
+    gray = cv.GaussianBlur(gray, (3, 3), 0)
+    # d_gray = gaussian_blur_kernel(gray, (3, 3), 0)
+    # gray = d_gray.copy_to_host()
 
     mask_img = applyCannyThreshold(gray, 12)
 

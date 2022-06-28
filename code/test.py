@@ -156,10 +156,11 @@ if __name__ == '__main__':
         X_test, xgb_pred = run_sequential(args, features, values, n_classes)
         np.savez('sequential.npz', seq_X_test=X_test, xgb_seq_pred=xgb_pred)
     else:
-        # base_X_test, xgb_base_pred = run_sequential(args, features, values, n_classes)
-        with np.load('sequential.npz') as features_n_pred:
-            base_X_test = features_n_pred['seq_X_test']
-            xgb_base_pred = features_n_pred['xgb_seq_pred']
+        base_X_test, xgb_base_pred = run_sequential(args, features, values, n_classes)
+
+        # with np.load('sequential.npz') as features_n_pred:
+        #     base_X_test = features_n_pred['seq_X_test']
+        #     xgb_base_pred = features_n_pred['xgb_seq_pred']
 
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
