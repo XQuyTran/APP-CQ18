@@ -296,7 +296,7 @@ def compute_hist(img, hist):
 
 def fd_histogram2(image, mask=None):
     # convert the image to HSV color-space
-    image = cv.cvtColor(image, cv.COLOR_BGR2HSV)
+    # image = cv.cvtColor(image, cv.COLOR_BGR2HSV)
 
     # compute the color histogram
     hist = np.zeros((8,8,8), np.float64) 

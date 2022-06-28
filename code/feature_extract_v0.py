@@ -114,7 +114,7 @@ def gaussian_blur_kernel(image, ksize, sigmaX, sigmaY=0, block_size=(32, 32)):
 def convert_rgb2gray_kernel(in_pixels, out_pixels):
     c, r = cuda.grid(2)
     if r < out_pixels.shape[0] and c < out_pixels.shape[1]:
-        out_pixels[r, c] = (in_pixels[r, c, 0] * 0.114 + 
+        out_pixels[r, c] = round(in_pixels[r, c, 0] * 0.114 + 
                             in_pixels[r, c, 1] * 0.587 + 
                             in_pixels[r, c, 2] * 0.299)
 

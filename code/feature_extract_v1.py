@@ -15,7 +15,7 @@ BLOCK_SIZE_2 = (32, 32)
 
 @cuda.jit
 def conv_no_padding_ones_kernel(src, ksize, out):
-    c, r = cuda.grid(2)
+    r, c = cuda.grid(2)
     offset = (ksize[0] // 2, ksize[1] // 2)
     r += offset[0]
     c += offset[1]
@@ -38,13 +38,13 @@ def _blk_count_nonzero(src, blk_dim_x, blk_dim_y, out):
     - blk_dim_x, blk_dim_y (int): lần lượt là kích thước theo chiều rộng và cao của khối được xét.
     - out (array): mảng kết quả.
     '''
-    c, r = cuda.grid(2)
+    r, c = cuda.grid(2)
     if c < src.shape[1] and r < src.shape[0] and src[r, c] > 0:
         cuda.atomic.add(out, (r // blk_dim_y, c // blk_dim_x), 1)
 
 @cuda.jit
 def _apply_threshold(src, threshold, criteria_arr, zip_x, zip_y):
-    c, r = cuda.grid(2)
+    r, c = cuda.grid(2)
     if c < src.shape[1] and r < src.shape[0]:
         blk_r = r // zip_y
         blk_c = c // zip_x
@@ -71,15 +71,15 @@ def zipImageKernel(src, zip_x, zip_y, ratio, block_size=(32, 32)):
     '''
 
     # tính số lượng khối.
-    zip_rs = math.ceil(src.shape[0] / zip_y)
-    zip_cs = math.ceil(src.shape[1] / zip_x)
+    zip_rs = int(src.shape[0] / zip_y)
+    zip_cs = int(src.shape[1] / zip_x)
     nonzero_count = cuda.device_array((zip_rs, zip_cs), np.uint32)
 
     if not cuda.is_cuda_array(src):
         d_src = cuda.to_device(src)
     else:
         d_src = src
-    grid_size = (math.ceil(src.shape[1] / block_size[0]), math.ceil(src.shape[0] / block_size[1]))
+    grid_size = (math.ceil(src.shape[0] / block_size[0]), math.ceil(src.shape[1] / block_size[1]))
 
     # đếm số điểm ảnh !=0 và đánh dấu những khối được nén.
     _blk_count_nonzero[grid_size, block_size](d_src, zip_x, zip_y, nonzero_count)
@@ -90,7 +90,7 @@ def zipImageKernel(src, zip_x, zip_y, ratio, block_size=(32, 32)):
 
 @cuda.jit
 def _apply_threshold_overlap(src, threshold, criteria_arr, zip_x, zip_y, mask_size):
-    c, r = cuda.grid(2)
+    r, c = cuda.grid(2)
     end = False
     if r < src.shape[0] and c < src.shape[1]:
         init_block = (r // zip_y, c // zip_x)
@@ -119,8 +119,8 @@ def joinNeighborPixelKernel(src, zip_x, zip_y, mask_size, ratio, block_size=(32,
     Đầu ra:
     - mask_image (numba.cuda.cudadrv.devicearray.DeviceNDArray): mảng đánh dấu những khối ảnh được liên kết.
     '''
-    zip_rs = math.ceil(src.shape[0] / zip_y)
-    zip_cs = math.ceil(src.shape[1] / zip_x)
+    zip_rs = int(src.shape[0] / zip_y)
+    zip_cs = int(src.shape[1] / zip_x)
     blk_nonzero_count = cuda.device_array((zip_rs, zip_cs), np.uint32)
 
     mask_shape = (zip_rs*mask_size, zip_cs*mask_size)
@@ -131,10 +131,10 @@ def joinNeighborPixelKernel(src, zip_x, zip_y, mask_size, ratio, block_size=(32,
     else:
         d_src = src
 
-    grid_size = (math.ceil(src.shape[1] / block_size[0]), math.ceil(src.shape[0] / block_size[1]))
-    _blk_count_nonzero[grid_size, block_size](d_src, zip_x, zip_y, blk_nonzero_count, (0, 0))
+    grid_size = (math.ceil(src.shape[0] / block_size[0]), math.ceil(src.shape[1] / block_size[1]))
+    _blk_count_nonzero[grid_size, block_size](d_src, zip_x, zip_y, blk_nonzero_count)
 
-    grid_size_conv_func = (math.ceil(mask_shape[1] / block_size[0]), math.ceil(mask_shape[0] / block_size[1]))
+    grid_size_conv_func = (math.ceil(mask_shape[0] / block_size[0]), math.ceil(mask_shape[1] / block_size[1]))
     conv_no_padding_ones_kernel[grid_size_conv_func, block_size](blk_nonzero_count, (mask_size, mask_size), mask_nonzero_count)
 
     threshold = mask_size * mask_size * zip_x * zip_y * ratio
@@ -205,7 +205,7 @@ def cvHuMoments_kernel(d_in_img,m_,mu_,nu_,hu_):
 
 @cuda.jit
 def apply_mask_kernel(image, mask):
-    c, r = cuda.grid(2)
+    r, c = cuda.grid(2)
     if c < image.shape[1] and r < image.shape[0]:
         for i in range(image.shape[2]):
             image[r, c, i] *= mask[r, c]
@@ -231,20 +231,22 @@ def getFigureForImage4(path):
 
     mask_img = applyCannyThreshold(gray, 12)
 
-    # mask_img = zipImage(mask_img, 8, 8, 0.12)
-    # mask_img = zipImage(mask_img, 16, 16, 0.2)
-    # mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
-    # mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
+    mask_img = zipImage(mask_img, 8, 8, 0.12)
+    mask_img = zipImage(mask_img, 16, 16, 0.2)
+    # mask_img = zipImageKernel(mask_img, 8, 8, 0.12, BLOCK_SIZE)
+    # mask_img = zipImageKernel(mask_img, 16, 16, 0.2, BLOCK_SIZE).copy_to_host()
+
+    mask_img = joinNeighborPixel(mask_img, 8, 8, 3, 0.15)
+    mask_img = joinNeighborPixel(mask_img, 16, 16, 3, 1 / 3)
+    # mask_img = joinNeighborPixelKernel(mask_img, 8, 8, 3, 0.15, BLOCK_SIZE)
+    # mask_img = joinNeighborPixelKernel(mask_img, 16, 16, 3, 1 / 3, BLOCK_SIZE)
 
     # for chanel in range(0, 3):
+    #     print(img[:,:,chanel])
     #     img[:,:,chanel] = img[:,:,chanel] * mask_img
+    #     print(img[:,:,chanel])
 
-    mask_img = zipImageKernel(mask_img, 8, 8, 0.12, BLOCK_SIZE)
-    mask_img = zipImageKernel(mask_img, 16, 16, 0.2, BLOCK_SIZE)
     
-    mask_img = joinNeighborPixelKernel(mask_img, 8, 8, 3, 0.15, BLOCK_SIZE)
-    mask_img = joinNeighborPixelKernel(mask_img, 16, 16, 3, 1 / 3, BLOCK_SIZE)
-
     grid_size_2 = (math.ceil(img.shape[0] / BLOCK_SIZE_2[0]),
                         math.ceil(img.shape[1] / BLOCK_SIZE_2[1]))
 
@@ -259,25 +261,25 @@ def getFigureForImage4(path):
     
 
     #huMoments
-    m=np.zeros((4, 4), dtype=np.float64)
-    mu=np.zeros((4, 4), dtype=np.float64)
-    nu=np.zeros((4, 4), dtype=np.float64)
-    hu=np.zeros(7,np.float64) 
-    d_m = cuda.to_device(m)
-    d_mu = cuda.to_device(mu)
-    d_nu = cuda.to_device(nu)
-    d_hu = cuda.to_device(hu)
+    # m=np.zeros((4, 4), dtype=np.float64)
+    # mu=np.zeros((4, 4), dtype=np.float64)
+    # nu=np.zeros((4, 4), dtype=np.float64)
+    # hu=np.zeros(7,np.float64) 
+    d_m = cuda.device_array((4, 4), np.float64)
+    d_mu = cuda.device_array((4, 4), np.float64)
+    d_nu = cuda.device_array((4, 4), np.float64)
+    d_hu = cuda.device_array(7, np.float64)
     cvHuMoments_kernel(d_gray_img,d_m,d_mu,d_nu,d_hu)
     hu_moments =d_hu.copy_to_host()
 
     #hist
-    hist_figure = fd_histogram2(img).astype(np.float64)
+    # hist_figure = fd_histogram2(img).astype(np.float64)
 
-    # hist_figure = np.zeros((8,8,8), np.float32) 
-    # d_hist = cuda.to_device(hist_figure)
-    # histogram_kernel[grid_size_2, BLOCK_SIZE_2](d_in_img,d_hist)
-    # hist_figure =d_hist.copy_to_host()
-    # cv.normalize(hist_figure, hist_figure)
+    hist_figure = np.zeros((8,8,8), np.float32) 
+    d_hist = cuda.to_device(hist_figure)
+    histogram_kernel[grid_size_2, BLOCK_SIZE_2](d_in_img,d_hist)
+    hist_figure =d_hist.copy_to_host()
+    cv.normalize(hist_figure, hist_figure)
 
     fig = np.concatenate((hist_figure.astype(np.float64).flatten(), hu_moments))
     return fig
